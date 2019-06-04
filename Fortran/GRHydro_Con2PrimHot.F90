@@ -73,15 +73,6 @@ subroutine Conservative2PrimitiveHot(CCTK_ARGUMENTS)
     local_min_tracer = 0.0d0
   end if
 
-  ! this is a poly call
-  xrho(1) = GRHydro_rho_min
-  call EOS_Omni_press(GRHydro_polytrope_handle,keytemp,GRHydro_eos_rf_prec,n,&
-       xrho,xeps,xtemp,xye,xpress,keyerr,anyerr)
-  call EOS_Omni_EpsFromPress(GRHydro_polytrope_handle,keytemp,GRHydro_eos_rf_prec,n,&
-       xrho,xeps,xtemp,xye,xpress,xeps,keyerr,anyerr)
-  pmin = xpress(1)
-  epsmin = xeps(1)
-
   !$OMP PARALLEL DO PRIVATE(i,j,k,itracer,&
   !$OMP uxx, uxy, uxz, uyy, uyz, uzz, sdet, epsnegative, anyerr, keyerr, keytemp,&
   !$OMP warnline, dummy1, dummy2,reset_to_atmo)
@@ -122,7 +113,7 @@ subroutine Conservative2PrimitiveHot(CCTK_ARGUMENTS)
         reset_to_atmo = 0
         IF_BELOW_ATMO(dens(i,j,k), sdet*GRHydro_rho_min, GRHydro_atmo_tolerance, r(i,j,k)) then
            reset_to_atmo = 1
-        endif
+        end if
 
         if (reset_to_atmo .gt. 0 .or. (GRHydro_enable_internal_excision /= 0 .and. hydro_excision_mask(i,j,k) .gt. 0)) then
           SET_ATMO_MIN(dens(i,j,k), sdet*GRHydro_rho_min, r(i,j,k))
@@ -318,36 +309,8 @@ subroutine Con2Prim_3DNR_1DD_hot(cctk_iteration, myproc, ii,jj,kk,handle, dens, 
   CCTK_REAL :: W_guess, z_guess, T_guess
 
   integer :: myproc
-
-  character(len=256) warnline
-  logical epsnegative, mustbisect
-
-  integer :: failwarnmode
-  integer :: failinfomode
-
-  !begin EOS Omni vars
-  CCTK_INT  :: n,keytemp,anyerr,keyerr(1)
-  CCTK_REAL :: xpress,temp0
-  CCTK_INT  :: nfudgemax,nf
-  n=1;keytemp=0;anyerr=0;keyerr(1)=0
-  temp0 = 0.0d0;xpress = 0.0d0
-  nf=0;nfudgemax=30
-  !end EOS Omni vars
-
+  character(len=256) :: warnline
   logical :: NR_failed, Dekker_failed
-
-  mustbisect = .false.
-  
-  failinfomode = 1
-  failwarnmode = 0
-
-  if(con2prim_oct_hack.ne.0.and.&
-      (x .lt. -1.0d-12 .or.&
-       y .lt. -1.0d-12 .or.&
-       z .lt. -1.0d-12)) then
-    failwarnmode = 2
-    failinfomode = 2
-  end if
 
   !!$Undensitize the variables
   invsdet = 1.0d0/sdet
@@ -363,18 +326,19 @@ subroutine Con2Prim_3DNR_1DD_hot(cctk_iteration, myproc, ii,jj,kk,handle, dens, 
   !Try 3D Newton Raphson in W,z,T
   success_3DNR = .false.
 
-  call Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2, utau, uye_con, &
-        usx, usy, usz, uxx, uxy, uxz, uyy, uyz, uzz, success_3DNR)
+  call Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2, utau, uye_con, success_3DNR, &
+        uxx, uxy, uxz, uyy, uyz, uzz, w_lorentz, rho, press, eps, temp, velx, vely, velz, local_perc_ptol)
 
   if(success_3DNR .eq. .false.) then
     !If NR fails, try 1D Dekker in h*W
     success_1DD = .false.
-    call Con2Prim_1DD_hot(udens, usx, usy, usz, s2, utau, uye_con, T_guess, x_result, success_1DD)
+    call Con2Prim_1DD_hot(udens, usx, usy, usz, s2, utau, uye_con, T_guess, x_result, success_1DD, &
+      uxx, uxy, uxz, uyy, uyz, uzz, w_lorentz, rho, press, eps, temp, velx, vely, velz, local_perc_ptol)
 
     if(success_1DD .eq. .false.) then
       !If Dekker also failed, abort.
       !$OMP CRITICAL
-      write(warnline,"Dekker fallback failed, aborting.")
+      write(warnline,*) "Dekker fallback failed, aborting."
       call CCTK_WARN(1,warnline)
       call CCTK_ERROR("C2P hot failed, aborting.")
       STOP
@@ -386,17 +350,20 @@ subroutine Con2Prim_3DNR_1DD_hot(cctk_iteration, myproc, ii,jj,kk,handle, dens, 
   
 end subroutine Con2Prim_3DNR_1DD_hot
 
-subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, W_result, z_result, T_result, &
-                             udens, usx, usy, usz, s2, utau, uye_con, success)
+subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2, utau, uye_con, success &
+  uxx, uxy, uxz, uyy, uyz, uzz, w_lorentz, rho, press, eps, temp, velx, vely, velz, local_perc_ptol)
   
   implicit none
 
   DECLARE_CCTK_PARAMETERS
   
   CCTK_REAL, intent(in) :: W_guess, z_guess, T_guess
-  CCTK_REAL, intent(out) :: W_result, z_result, T_result
   CCTK_REAL, intent(in) :: udens, usx, usy, usz, s2, utau, uye_con
-  
+  CCTK_REAL, intent(in) :: uxx, uxy, uxz, uyy, uyz, uzz
+  CCTK_REAL, intent(in) :: local_perc_ptol
+  CCTK_REAL, intent(inout) :: w_lorentz, rho, press, eps, temp, velx, vely, velz
+  logical, intent(out) :: success
+
   CCTK_REAL :: W_current, z_current, T_current
   CCTK_REAL :: Ye_current
   CCTK_REAL :: cons1, cons2, cons3
@@ -410,8 +377,8 @@ subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, W_result, z_result, T_re
   CCTK_REAL :: iJ1W,iJ1z,iJ1T,iJ2W,iJ2z,iJ2T,iJ3W,iJ3z,iJ3T
   CCTK_REAL :: delta_W, delta_z, delta_T
   CCTK_REAL :: delta_W_old, delta_z_old, delta_T_old
+  CCTK_REAL :: vlowx, vlowy, vlowz
 
-  logical, intent(out) :: success
   logical :: done
 
   integer :: count
@@ -635,24 +602,28 @@ subroutine Con2Prim_3DNR_InvertJacobian(J1W,J1z,J1T,J2W,J2z,J2T,J3W,J3z,J3T,&
   return
 end subroutine Con2Prim_3DNR_InvertJacobian
 
-subroutine Con2Prim_1DD_hot(udens, usx, usy, usz, s2, utau, uye_con, T_prev, result, success)
+subroutine Con2Prim_1DD_hot(udens, usx, usy, usz, s2, utau, uye_con, T_prev, success, &
+  uxx, uxy, uxz, uyy, uyz, uzz, w_lorentz, rho, press, eps, temp, velx, vely, velz, local_perc_ptol)
   
   implicit none
 
   DECLARE_CCTK_PARAMETERS
   
   CCTK_REAL, intent(in) :: udens, usx, usy, usz, s2, utau, uye_con, T_prev
-  CCTK_REAL, intent(out) :: result
+  CCTK_REAL, intent(in) :: uxx, uxy, uxz, uyy, uyz, uzz
+  CCTK_REAL, intent(in) :: local_perc_ptol
+  CCTK_REAL, intent(inout) :: w_lorentz, rho, press, eps, temp, velx, vely, velz
+  logical, intent(out) :: success
   
   CCTK_REAL :: Ye, q, r
   CCTK_REAL :: a0, b0, fa0, fb0
   CCTK_REAL :: ak, bk, fak, fbk, bkm1, fbkm1, mk, sk, 
   CCTK_REAL :: akp1, fakp1, bkp1, fbkp1
   CCTK_REAL :: x_temp, fx_temp
+  CCTK_REAL :: z_result
 
-  logical,intent(out) :: success
   logical :: done
-  
+
   integer :: count
 
   CCTK_INT :: anyerr = 0
@@ -759,7 +730,7 @@ subroutine Con2Prim_1DD_hot(udens, usx, usy, usz, s2, utau, uye_con, T_prev, res
   W_result = sqrt(1.0d0/W_result_m2)
   eps_result = -1.0d0 + (x*(1.0d0-(W_result**2))/W_result) + W_result*(1.0d0+q)
   rho_result = udens/W_result
-  call Con2Prim_DekkerInvertTemp(eps_guess, T_prev, rho_guess, Ye, T_guess)
+  call Con2Prim_DekkerInvertTemp(eps_result, T_prev, rho_result, Ye, T_result)
   call EOS_Omni_press(GRHydro_eos_handle,1,GRHydro_eos_rf_prec,1,&
         rho_result,eps_result,T_result,Ye,press_result,keyerr,anyerr)
 
@@ -772,6 +743,18 @@ subroutine Con2Prim_1DD_hot(udens, usx, usy, usz, s2, utau, uye_con, T_prev, res
   if ((error_s2.gt.local_perc_ptol) .or. (error_tau.gt.local_perc_ptol)) then
     success = .true.
     !Primitives from x + conservative
+    w_lorentz = W_result
+    rho = rho_result
+    press = press_result
+    eps = eps_result
+    temp = T_result
+    z_result = (rho_result + eps_result*rho_result + press_result) * (W_result**2.0d0) 
+    vlowx = usx / z_result
+    vlowy = usy / z_result
+    vlowz = usz / z_result
+    velx = uxx * vlowx + uxy * vlowy + uxz * vlowz
+    vely = uxy * vlowx + uyy * vlowy + uyz * vlowz
+    velz = uxz * vlowx + uyz * vlowy + uzz * vlowz
   end if
 
   return
