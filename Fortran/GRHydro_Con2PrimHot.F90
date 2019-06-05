@@ -471,6 +471,10 @@ subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2
   z_current = z_guess
   T_current = T_guess
 
+  delta_W_old = 1.0d6
+  delta_z_old = 1.0d6
+  delta_T_old = 1.0d6
+
   count = 0
   !loop
   do while(done .eq. .false.)
