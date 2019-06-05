@@ -335,10 +335,15 @@ subroutine Con2Prim_3DNR_1DD_hot(cctk_iteration, &
   CCTK_REAL dummy1, dummy2
   logical :: epsnegative
   CCTK_REAL local_perc_ptol
-  CCTK_INT :: anyerr = 0
-  CCTK_INT :: keyerr = 0
 
   CCTK_REAL :: W_guess, z_guess, T_guess
+
+  !Temporary vars for EOS calls
+  CCTK_REAL :: EOS_rho(1)=0.0d0, EOS_T(1)=0.0d0, EOS_ye(1)=0.0d0
+  CCTK_REAL :: EOS_press(1)=0.0d0, EOS_eps(1)=0.0d0
+  CCTK_INT :: EOS_n=1, EOS_Tflag=1
+  CCTK_INT :: EOS_anyerr = 0
+  CCTK_INT :: EOS_keyerr(1) = 0
 
   integer :: myproc
   character(len=256) :: warnline
@@ -386,8 +391,12 @@ subroutine Con2Prim_3DNR_1DD_hot(cctk_iteration, &
     temp = GRHydro_hot_atmo_temp
     ye = GRHydro_hot_atmo_Y_e
     ye_con = dens * ye
-    call EOS_Omni_press(handle,1,GRHydro_eos_rf_prec,1, &
-         rho,epsilon,temp,ye,press,keyerr,anyerr)
+    
+    EOS_rho(1)=rho; EOS_T(1)=temp; EOS_ye(1)=ye
+    call EOS_Omni_press(handle,EOS_Tflag,GRHydro_eos_rf_prec,EOS_n,&
+      EOS_rho,EOS_eps,EOS_T,EOS_ye,EOS_press,EOS_keyerr,EOS_anyerr)
+    epsilon=EOS_eps(1); press=EOS_press(1)
+    
     ! w_lorentz=1, so the expression for utau reduces to:
     utau  = rho + rho*epsilon - udens
     sx = 0.d0
@@ -429,9 +438,6 @@ subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2
   CCTK_REAL :: Ye_current
   CCTK_REAL :: cons1, cons2, cons3
 
-  CCTK_INT :: anyerr = 0
-  CCTK_INT :: keyerr = 0
-
   CCTK_REAL :: rho_current, press_current, eps_current
   CCTK_REAL :: dpdr, dedr, dpdW, dpdT, dedW, dedT
   CCTK_REAL :: J1W,J1z,J1T,J2W,J2z,J2T,J3W,J3z,J3T
@@ -443,6 +449,14 @@ subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2
   CCTK_REAL :: W_result, z_result, T_result
   CCTK_REAL :: rho_result, eps_result, press_result
   CCTK_REAL :: xs2, xh, xtau, error_s2, error_tau
+
+  !Temporary vars for EOS calls
+  CCTK_REAL :: EOS_rho(1)=0.0d0, EOS_T(1)=0.0d0, EOS_ye(1)=0.0d0
+  CCTK_REAL :: EOS_press(1)=0.0d0, EOS_eps(1)=0.0d0
+  CCTK_REAL :: EOS_dpdr(1)=0.0d0, EOS_dpdT(1)=0.0d0, EOS_dedr(1)=0.0d0, EOS_dedT(1)=0.0d0
+  CCTK_INT :: EOS_n=1, EOS_Tflag=1
+  CCTK_INT :: EOS_anyerr = 0
+  CCTK_INT :: EOS_keyerr(1) = 0
 
   logical :: done
 
@@ -462,8 +476,10 @@ subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2
   do while(done .eq. .false.)
     rho_current = udens/W_current
     !Get press and eps
-    call EOS_Omni_press(handle,1,GRHydro_eos_rf_prec,1,&
-          rho_current,eps_current,T_current,Ye_current,press_current,keyerr,anyerr)
+    EOS_rho(1)=rho_current; EOS_T(1)=T_current; EOS_ye(1)=Ye_current
+    call EOS_Omni_press(handle,EOS_Tflag,GRHydro_eos_rf_prec,EOS_n,&
+      EOS_rho,EOS_eps,EOS_T,EOS_ye,EOS_press,EOS_keyerr,EOS_anyerr)
+    press_current=EOS_press(1); eps_current=EOS_eps(1)
 
     !Calculate constraints
     call Con2Prim_3DNR_hot_cons1(W_current,z_current,udens,utau,press_current,cons1)
@@ -471,15 +487,20 @@ subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2
     call Con2Prim_3DNR_hot_cons1(W_current,z_current,udens,press_current,eps_current,cons3)
 
     !Calculate Jacobian
-    call EOS_Omni_DPressByDRho(handle,1,GRHydro_eos_rf_prec,1,&
-          rho_current,eps_current,T_current,Ye_current,dpdr,keyerr,anyerr)
-    call EOS_Omni_DPressByDT(handle,1,GRHydro_eos_rf_prec,1,&
-          rho_current,eps_current,T_current,Ye_current,dpdT,keyerr,anyerr)
+    call EOS_Omni_DPressByDRho(handle,EOS_Tflag,GRHydro_eos_rf_prec,EOS_n,&
+      EOS_rho,EOS_eps,EOS_T,EOS_ye,EOS_dpdr,EOS_keyerr,EOS_anyerr)
+    call EOS_Omni_DPressByDT(handle,EOS_Tflag,GRHydro_eos_rf_prec,EOS_n,&
+      EOS_rho,EOS_eps,EOS_T,EOS_ye,EOS_dpdT,EOS_keyerr,EOS_anyerr)
     
-    call EOS_Omni_DEpsByDRho(handle,1,GRHydro_eos_rf_prec,1,&
-          rho_current,eps_current,T_current,Ye_current,dedr,keyerr,anyerr)
-    call EOS_Omni_DEpsByDT(handle,1,GRHydro_eos_rf_prec,1,&
-          rho_current,eps_current,T_current,Ye_current,dedT,keyerr,anyerr)
+    call EOS_Omni_DEpsByDRho(handle,EOS_Tflag,GRHydro_eos_rf_prec,EOS_n,&
+      EOS_rho,EOS_eps,EOS_T,EOS_ye,EOS_dedr,EOS_keyerr,EOS_anyerr)
+    call EOS_Omni_DEpsByDT(handle,EOS_Tflag,GRHydro_eos_rf_prec,EOS_n,&
+      EOS_rho,EOS_eps,EOS_T,EOS_ye,EOS_dedT,EOS_keyerr,EOS_anyerr)
+
+    dpdr = EOS_dpdr(1)
+    dpdT = EOS_dpdT(1)
+    dedr = EOS_dedr(1)
+    dedT = EOS_dedT(1)
 
     dpdW = -udens*(W_current**(-2.0d0))*dpdr
     dedW = -udens*(W_current**(-2.0d0))*dedr
@@ -563,8 +584,10 @@ subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2
 
   rho_result = udens/W_result
 
-  call EOS_Omni_press(handle,1,GRHydro_eos_rf_prec,1,&
-        rho_result,eps_result,T_result,Ye_current,press_result,keyerr,anyerr)
+  EOS_rho(1)=rho_result; EOS_T(1)=T_result; EOS_ye(1)=Ye_current
+  call EOS_Omni_press(handle,EOS_Tflag,GRHydro_eos_rf_prec,EOS_n,&
+    EOS_rho,EOS_Eps,EOS_T,EOS_ye,EOS_press,EOS_keyerr,EOS_anyerr)
+  press_result=EOS_press(1); eps_result=EOS_Eps(1)
 
   xs2 = (z_result**2) * (1.0d0 - (W_result**(-2.0d0)))
   xh = 1.0d0 + eps_result + press_result/rho_result
@@ -696,8 +719,12 @@ subroutine Con2Prim_1DD_hot(udens, usx, usy, usz, s2, utau, uye_con, T_prev, suc
 
   integer :: count
 
-  CCTK_INT :: anyerr = 0
-  CCTK_INT :: keyerr = 0
+  !Temporary vars for EOS calls
+  CCTK_REAL :: EOS_rho(1)=0.0d0, EOS_T(1)=0.0d0, EOS_ye(1)=0.0d0
+  CCTK_REAL :: EOS_press(1)=0.0d0, EOS_eps(1)=0.0d0
+  CCTK_INT :: EOS_n=1, EOS_Tflag=1
+  CCTK_INT :: EOS_anyerr = 0
+  CCTK_INT :: EOS_keyerr(1) = 0
 
   Ye = uye_con/udens
 
@@ -801,8 +828,11 @@ subroutine Con2Prim_1DD_hot(udens, usx, usy, usz, s2, utau, uye_con, T_prev, suc
   eps_result = -1.0d0 + (x_result*(1.0d0-(W_result**2))/W_result) + W_result*(1.0d0+q)
   rho_result = udens/W_result
   call Con2Prim_DekkerInvertTemp(eps_result, T_prev, rho_result, Ye, T_result, handle)
-  call EOS_Omni_press(handle,1,GRHydro_eos_rf_prec,1,&
-        rho_result,eps_result,T_result,Ye,press_result,keyerr,anyerr)
+  
+  EOS_rho(1)=rho_result; EOS_T(1)=T_result; EOS_ye(1)=Ye
+  call EOS_Omni_press(handle,EOS_Tflag,GRHydro_eos_rf_prec,EOS_n,&
+    EOS_rho,EOS_eps,EOS_T,EOS_ye,EOS_press,EOS_keyerr,EOS_anyerr)
+  press_result=EOS_press(1); eps_result=EOS_eps(1)
 
   xs2 = ((udens*x_result)**2.0d0) * (1.0d0 - (W_result**(-2.0d0)))
   xtau = (udens*x_result) - press_result - udens
@@ -842,16 +872,22 @@ subroutine Con2Prim_DekkerRoot(x, udens, Ye, q, r, T_prev, result, handle)
 
   CCTK_REAL :: W_guess_m2, W_guess, eps_guess, T_guess, press_guess, h_guess, rho_guess
 
-  CCTK_INT :: anyerr = 0
-  CCTK_INT :: keyerr = 0
+  !Temporary vars for EOS calls
+  CCTK_REAL :: EOS_rho(1)=0.0d0, EOS_T(1)=0.0d0, EOS_ye(1)=0.0d0
+  CCTK_REAL :: EOS_press(1)=0.0d0, EOS_eps(1)=0.0d0
+  CCTK_INT :: EOS_n=1, EOS_Tflag=1
+  CCTK_INT :: EOS_anyerr = 0
+  CCTK_INT :: EOS_keyerr(1) = 0
 
   W_guess_m2 = 1.0d0 - r / (x**2.0d0)
   W_guess = sqrt(1.0d0/W_guess_m2)
   eps_guess = -1.0d0 + (x*(1.0d0-(W_guess**2))/W_guess) + W_guess*(1.0d0+q)
   rho_guess = udens/W_guess
   call Con2Prim_DekkerInvertTemp(eps_guess, T_prev, rho_guess, Ye, T_guess)
-  call EOS_Omni_press(handle,1,GRHydro_eos_rf_prec,1,&
-        rho_guess,eps_guess,T_guess,Ye,press_guess,keyerr,anyerr)
+  EOS_rho(1)=rho_guess; EOS_T(1)=T_guess; EOS_ye(1)=Ye
+  call EOS_Omni_press(handle,EOS_Tflag,GRHydro_eos_rf_prec,EOS_n,&
+    EOS_rho,EOS_eps,EOS_T,EOS_ye,EOS_press,EOS_keyerr,EOS_anyerr)
+  press_guess=EOS_press(1); eps_guess=EOS_eps(1)
 
   h_guess = 1.0d0 + eps_guess + press_guess/rho_guess
 
@@ -876,9 +912,6 @@ subroutine Con2Prim_DekkerInvertTemp(eps_target, T_guess, rho, Ye, result, handl
   CCTK_REAL :: T_found
   logical :: NR_success
   character(len=256) :: warnline
-
-  CCTK_INT :: anyerr = 0
-  CCTK_INT :: keyerr = 0
 
   temp_inversion_its = 100
   temp_inversion_reldiff = 1.0d-14
@@ -935,19 +968,28 @@ subroutine Con2Prim_NRTemp(eps_target, T_guess, rho, Ye, NR_frac, its, reldiff, 
   logical :: done
   CCTK_REAL :: T_current, eps_current, root_current, delta_T, dedT, xeps
 
-  CCTK_INT :: anyerr = 0
-  CCTK_INT :: keyerr = 0
+  !Temporary vars for EOS calls
+  CCTK_REAL :: EOS_rho(1)=0.0d0, EOS_T(1)=0.0d0, EOS_ye(1)=0.0d0
+  CCTK_REAL :: EOS_press(1)=0.0d0, EOS_eps(1)=0.0d0
+  CCTK_REAL :: EOS_dedT(1)=0.0d0
+  CCTK_INT :: EOS_n=1, EOS_Tflag=1
+  CCTK_INT :: EOS_anyerr = 0
+  CCTK_INT :: EOS_keyerr(1) = 0
 
   count = 0
   done = .false.
 
   T_current = T_guess
-  call EOS_Omni_Eps(handle,1,GRHydro_eos_rf_prec,1,&
-        rho,eps_current,T_current,Ye,keyerr,anyerr)
+  EOS_rho(1) = rho; EOS_T(1) = T_current; EOS_ye(1) = Ye
+  call EOS_Omni_Eps(handle,EOS_Tflag,GRHydro_eos_rf_prec,EOS_n,&
+    EOS_rho,EOS_eps,EOS_T,EOS_ye,EOS_keyerr,EOS_anyerr)
+  eps_current = EOS_eps(1)
   
   do while(done .eq. .false.)
-    call EOS_Omni_DEpsByDT(handle,1,GRHydro_eos_rf_prec,1,&
-          rho,xeps,T_current,Ye,dedT,keyerr,anyerr)
+    EOS_T(1) = T_current
+    call EOS_Omni_DEpsByDT(handle,EOS_Tflag,GRHydro_eos_rf_prec,EOS_n,&
+      EOS_rho,EOS_eps,EOS_T,EOS_ye,dedT,EOS_keyerr,EOS_anyerr)
+    dedT = EOS_dedT(1)
 
     root_current = eps_target - eps_current
     delta_T = root_current/dedT
@@ -959,8 +1001,10 @@ subroutine Con2Prim_NRTemp(eps_target, T_guess, rho, Ye, NR_frac, its, reldiff, 
       T_current = eos_compose_temp_max
     end if
 
-    call EOS_Omni_Eps(handle,1,GRHydro_eos_rf_prec,1,&
-        rho,eps_current,T_current,Ye,keyerr,anyerr)
+    EOS_T(1) = T_current
+    call EOS_Omni_Eps(handle,EOS_Tflag,GRHydro_eos_rf_prec,EOS_n,&
+      EOS_rho,EOS_eps,EOS_T,EOS_ye,EOS_keyerr,EOS_anyerr)
+    eps_current = EOS_eps(1)
   
     count = count + 1
 
