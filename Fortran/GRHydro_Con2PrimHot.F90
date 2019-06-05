@@ -27,6 +27,9 @@ subroutine Conservative2PrimitiveHot(CCTK_ARGUMENTS)
   CCTK_REAL :: local_perc_ptol
   integer :: reflevel
 
+  !Initial guesses for C2P from previous timestep
+  CCTK_REAL :: W_guess, z_guess, T_guess
+
   ! save memory when MP is not used
   CCTK_INT :: GRHydro_UseGeneralCoordinates
   CCTK_REAL, DIMENSION(cctk_ash1,cctk_ash2,cctk_ash3) :: g11, g12, g13, g22, g23, g33
@@ -75,7 +78,7 @@ subroutine Conservative2PrimitiveHot(CCTK_ARGUMENTS)
 
   !$OMP PARALLEL DO PRIVATE(i,j,k,itracer,&
   !$OMP uxx, uxy, uxz, uyy, uyz, uzz, sdet, epsnegative, anyerr, keyerr, keytemp,&
-  !$OMP warnline, dummy1, dummy2,reset_to_atmo)
+  !$OMP warnline, dummy1, dummy2,reset_to_atmo, W_guess, z_guess, T_guess)
   do k = 1, nz
     do j = 1, ny
       do i = 1, nx
@@ -135,15 +138,19 @@ subroutine Conservative2PrimitiveHot(CCTK_ARGUMENTS)
           tau(i,j,k)  = sdet * (rho(i,j,k)+rho(i,j,k)*eps(i,j,k)) - dens(i,j,k)
           cycle
         end if
+
+        W_guess = w_lorentz_p(i,j,k)
+        z_guess = ((rho_p(i,j,k)*(1.0d0 + epsilon_p(i,j,k)) + press_p(i,j,k))) * (w_lorentz_p(i,j,k) ** 2.0d0)
+        T_guess = temperature_p(i,j,k)
         
-        call Con2Prim_pt_hot3(int(cctk_iteration,ik),myproc,int(i,ik),int(j,ik),int(k,ik),GRHydro_eos_handle,&
+        call Con2Prim_3DNR_1DD_hot(int(cctk_iteration,ik),myproc,int(i,ik),int(j,ik),int(k,ik),GRHydro_eos_handle,&
              dens(i,j,k),scon(i,j,k,1),&
              scon(i,j,k,2),scon(i,j,k,3),tau(i,j,k),Y_e_con(i,j,k),rho(i,j,k),vup(i,j,k,1),&
              vup(i,j,k,2),vup(i,j,k,3),eps(i,j,k),temperature(i,j,k),y_e(i,j,k),&
              press(i,j,k),w_lorentz(i,j,k), &
              uxx,uxy,uxz,uyy,uyz,uzz,sdet,x(i,j,k),y(i,j,k), &
-             z(i,j,k),r(i,j,k),epsnegative,GRHydro_rho_min,pmin, epsmin, &
-             int(reflevel,ik), GRHydro_C2P_failed(i,j,k), GRHydro_perc_ptol)
+             z(i,j,k),r(i,j,k),epsnegative,GRHydro_rho_min, &
+             int(reflevel,ik), GRHydro_C2P_failed(i,j,k), GRHydro_perc_ptol, W_guess, z_guess, T_guess)
 
         if(temperature(i,j,k).gt.GRHydro_max_temp) then
           !$OMP CRITICAL
@@ -182,14 +189,14 @@ subroutine Conservative2PrimitiveHot(CCTK_ARGUMENTS)
             ! somewhat arbitrarily to be 0.01% in pressnew/pressold.
             local_perc_ptol = 1.0d-4
           endif
-          call Con2Prim_pt_hot3(int(cctk_iteration,ik),myproc,int(i,ik),int(j,ik),int(k,ik),GRHydro_eos_handle,&
+          call Con2Prim_3DNR_1DD_hot(int(cctk_iteration,ik),myproc,int(i,ik),int(j,ik),int(k,ik),GRHydro_eos_handle,&
                 dens(i,j,k),scon(i,j,k,1),&
                 scon(i,j,k,2),scon(i,j,k,3),tau(i,j,k),Y_e_con(i,j,k),rho(i,j,k),&
                 vup(i,j,k,1),vup(i,j,k,2), vup(i,j,k,3),eps(i,j,k),&
                 temperature(i,j,k),y_e(i,j,k),press(i,j,k),w_lorentz(i,j,k), &
                 uxx,uxy,uxz,uyy,uyz,uzz,sdet,x(i,j,k),y(i,j,k), &
-                z(i,j,k),r(i,j,k),epsnegative,GRHydro_rho_min,pmin, epsmin, &
-                int(reflevel,ik), GRHydro_C2P_failed(i,j,k), local_perc_ptol)
+                z(i,j,k),r(i,j,k),epsnegative,GRHydro_rho_min,&
+                int(reflevel,ik), GRHydro_C2P_failed(i,j,k), local_perc_ptol, W_guess, z_guess, T_guess)
           if(abs(GRHydro_C2P_failed(i,j,k)-2.0d0) .lt. 1.0d-10) then
             !$OMP CRITICAL
             if (reflevel.ge.GRHydro_c2p_warn_from_reflevel) then
@@ -285,11 +292,32 @@ subroutine Conservative2PrimitiveHot(CCTK_ARGUMENTS)
 end subroutine Conservative2PrimitiveHot
 
 
-subroutine Con2Prim_3DNR_1DD_hot(cctk_iteration, myproc, ii,jj,kk,handle, dens, &
-    sx, sy, sz, tau, ye_con, rho, velx, vely, &
-    velz, epsilon, temp, ye, press, w_lorentz, uxx, uxy, uxz, uyy, &
-    uyz, uzz, sdet, x, y, z, r, epsnegative, GRHydro_rho_min, pmin, epsmin, &
-    GRHydro_reflevel, GRHydro_C2P_failed, local_perc_ptol, W_guess, z_guess, T_guess)
+subroutine Con2Prim_3DNR_1DD_hot(cctk_iteration, &
+                                 myproc, &
+                                 ii, jj, kk, &
+                                 handle, &
+                                 dens, &
+                                 sx, sy, sz, &
+                                 tau, &
+                                 ye_con, &
+                                 rho, &
+                                 velx, vely, velz, &
+                                 epsilon, &
+                                 temp, &
+                                 ye, &
+                                 press, &
+                                 w_lorentz, &
+                                 uxx, uxy, uxz, uyy, uyz, uzz, &
+                                 sdet, &
+                                 x, y, z, r, &
+                                 epsnegative, &
+                                 GRHydro_rho_min, &
+                                 GRHydro_reflevel, &
+                                 GRHydro_C2P_failed, &
+                                 local_perc_ptol, &
+                                 W_guess, &
+                                 z_guess, &
+                                 T_guess)
 
   implicit none
 
@@ -305,6 +333,8 @@ subroutine Con2Prim_3DNR_1DD_hot(cctk_iteration, myproc, ii,jj,kk,handle, dens, 
   CCTK_REAL GRHydro_C2P_failed
   CCTK_REAL udens, usx, usy, usz, utau, uye_con
   CCTK_REAL local_perc_ptol
+  CCTK_INT :: anyerr = 0
+  CCTK_INT :: keyerr = 0
 
   CCTK_REAL :: W_guess, z_guess, T_guess
 
@@ -338,12 +368,40 @@ subroutine Con2Prim_3DNR_1DD_hot(cctk_iteration, myproc, ii,jj,kk,handle, dens, 
     if(success_1DD .eq. .false.) then
       !If Dekker also failed, abort.
       !$OMP CRITICAL
+      GRHydro_C2P_failed = 1.0d0
       write(warnline,*) "Dekker fallback failed, aborting."
       call CCTK_WARN(1,warnline)
       call CCTK_ERROR("C2P hot failed, aborting.")
       STOP
       !$OMP END CRITICAL
     end if
+  end if
+
+  IF_BELOW_ATMO(rho, GRHydro_rho_min, GRHydro_atmo_tolerance, r) then
+    SET_ATMO_MIN(rho, GRHydro_rho_min, r) !GRHydro_rho_min
+    udens = rho
+    dens = sdet * rho
+    temp = GRHydro_hot_atmo_temp
+    ye = GRHydro_hot_atmo_Y_e
+    ye_con = dens * ye
+    call EOS_Omni_press(handle,1,GRHydro_eos_rf_prec,1, &
+         rho,epsilon,temp,ye,press,keyerr,anyerr)
+    ! w_lorentz=1, so the expression for utau reduces to:
+    utau  = rho + rho*epsilon - udens
+    sx = 0.d0
+    sy = 0.d0
+    sz = 0.d0
+    s2 = 0.d0
+    usx = 0.d0
+    usy = 0.d0
+    usz = 0.d0
+    w_lorentz = 1.d0
+    vlowx = usx / ( (rho + rho*epsilon + press) * w_lorentz**2)
+    vlowy = usy / ( (rho + rho*epsilon + press) * w_lorentz**2)
+    vlowz = usz / ( (rho + rho*epsilon + press) * w_lorentz**2)
+    velx = uxx * vlowx + uxy * vlowy + uxz * vlowz
+    vely = uxy * vlowx + uyy * vlowy + uyz * vlowz
+    velz = uxz * vlowx + uyz * vlowy + uzz * vlowz
   end if
     
 
