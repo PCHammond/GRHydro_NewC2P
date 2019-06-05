@@ -440,6 +440,10 @@ subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2
   CCTK_REAL :: delta_W_old, delta_z_old, delta_T_old
   CCTK_REAL :: vlowx, vlowy, vlowz
 
+  CCTK_REAL :: W_result, z_result, T_result
+  CCTK_REAL :: rho_result, eps_result, press_result
+  CCTK_REAL :: xs2, xh, xtau, error_s2, error_tau
+
   logical :: done
 
   integer :: count
@@ -478,7 +482,7 @@ subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2
           rho_current,eps_current,T_current,Ye_current,dedT,keyerr,anyerr)
 
     dpdW = -udens*(W_current**(-2.0d0))*dpdr
-    dedW = -udens*(W_current**(-2.0d0))*dpde
+    dedW = -udens*(W_current**(-2.0d0))*dedr
 
     J1W = 2.0d0*W_current*(utau + udens - z_current + press_current) + (W_current**2.0d0)*dpdW
     J1z = -(W_current**2.0d0)
@@ -488,7 +492,7 @@ subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2
     J2z = 2.0d0*z_current*((W_current**2.0d0) - 1.0d0)
     J2T = 0.0d0
 
-    J3W = - (z_current/(udens*(W_current**2))) - ((press_current + W*dpdW)/udens) - dedW
+    J3W = - (z_current/(udens*(W_current**2))) - ((press_current + W_current*dpdW)/udens) - dedW
     J3z = 1.0d0/(udens*W_current)
     J3T = - dedT - ((W_current/udens)*dpdT)
 
@@ -501,9 +505,9 @@ subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2
                                     iJ1T,iJ2T,iJ3T)
   
     !Calculate deltas
-    delta_W = cons1*iJW1 + cons2*iJW2 + cons3*iJW3
-    delta_z = cons1*iJz1 + cons2*iJz2 + cons3*iJz3
-    delta_T = cons1*iJT1 + cons2*iJT2 + cons3*iJT3
+    delta_W = cons1*iJ1W + cons2*iJ2W + cons3*iJ3W
+    delta_z = cons1*iJ1z + cons2*iJ2z + cons3*iJ3z
+    delta_T = cons1*iJ1T + cons2*iJ2T + cons3*iJ3T
     
     !Update WzT
     W_current = W_current - delta_W
@@ -679,10 +683,14 @@ subroutine Con2Prim_1DD_hot(udens, usx, usy, usz, s2, utau, uye_con, T_prev, suc
   
   CCTK_REAL :: Ye, q, r
   CCTK_REAL :: a0, b0, fa0, fb0
-  CCTK_REAL :: ak, bk, fak, fbk, bkm1, fbkm1, mk, sk, 
+  CCTK_REAL :: ak, bk, fak, fbk, bkm1, fbkm1, mk, sk
   CCTK_REAL :: akp1, fakp1, bkp1, fbkp1
   CCTK_REAL :: x_temp, fx_temp
   CCTK_REAL :: z_result
+  CCTK_REAL :: x_result
+  CCTK_REAL :: W_result_m2, W_result, eps_result, rho_result, T_result, press_result
+  CCTK_REAL :: xs2, xtau, error_s2, error_tau
+  CCTK_REAL :: vlowx, vlowy, vlowz
 
   logical :: done
 
@@ -694,7 +702,7 @@ subroutine Con2Prim_1DD_hot(udens, usx, usy, usz, s2, utau, uye_con, T_prev, suc
   Ye = uye_con/udens
 
   q = utau/udens
-  r = s2/(dens**2.0d0)
+  r = s2/(udens**2.0d0)
 
   a0 = 1.0d0 + q
   b0 = 2.0d0 * (a0)
@@ -705,10 +713,10 @@ subroutine Con2Prim_1DD_hot(udens, usx, usy, usz, s2, utau, uye_con, T_prev, suc
   done = .false.
 
   if (abs(fa0).lt.a0*local_perc_ptol) then
-    result = a0
+    x_result = a0
     done = .true.
   else if (abs(fb0).lt.b0*local_perc_ptol) then
-    result = b0
+    x_result = b0
     done = .true.
   end if
 
@@ -738,15 +746,15 @@ subroutine Con2Prim_1DD_hot(udens, usx, usy, usz, s2, utau, uye_con, T_prev, suc
     mk = 0.5d0 * (ak + bk)
     
     if ((fbk.ne.fbkm1).and.((2.0d0*(bk-bkm1)).gt.((bk+bkm1)*1.0d-6))) then
-      s = bk - fbk*(bk-bkm1)/(fbk-fbkm1)
+      sk = bk - fbk*(bk-bkm1)/(fbk-fbkm1)
     else
-      s = m
+      sk = mk
     end if
     
-    if ((s-bk)*(bk-m).lt.0.0d0) then
-      bkp1 = s
+    if ((sk-bk)*(bk-mk).lt.0.0d0) then
+      bkp1 = sk
     else
-      bkp1 = m
+      bkp1 = mk
     end if
 
     call Con2Prim_DekkerRoot(bkp1, udens, ye, q, r, T_prev, fbkp1, handle)
@@ -780,27 +788,27 @@ subroutine Con2Prim_1DD_hot(udens, usx, usy, usz, s2, utau, uye_con, T_prev, suc
     fbk = fbkp1
     
     if (abs(fbk).lt.bk*local_perc_ptol) then
-      result = bk
+      x_result = bk
       done = .true.
     else if(count.gt.GRHydro_countmax) then
-      result = bk
+      x_result = bk
       done = .true.
     end if
   end do
 
-  W_result_m2 = 1.0d0 - r / (x**2.0d0)
+  W_result_m2 = 1.0d0 - r / (x_result**2.0d0)
   W_result = sqrt(1.0d0/W_result_m2)
-  eps_result = -1.0d0 + (x*(1.0d0-(W_result**2))/W_result) + W_result*(1.0d0+q)
+  eps_result = -1.0d0 + (x_result*(1.0d0-(W_result**2))/W_result) + W_result*(1.0d0+q)
   rho_result = udens/W_result
   call Con2Prim_DekkerInvertTemp(eps_result, T_prev, rho_result, Ye, T_result, handle)
   call EOS_Omni_press(handle,1,GRHydro_eos_rf_prec,1,&
         rho_result,eps_result,T_result,Ye,press_result,keyerr,anyerr)
 
-  xs2 = ((udens*result)**2.0d0) * (1.0d0 - (W_result**(-2.0d0)))
-  xtau = (udens*result) - press_result - udens
+  xs2 = ((udens*x_result)**2.0d0) * (1.0d0 - (W_result**(-2.0d0)))
+  xtau = (udens*x_result) - press_result - udens
 
   error_s2  = 2.0d0*abs(s2-xs2)/(s2+xs2)
-  error_tau = 2.0d0*abs(tau-xtau)/(tau+xtau)
+  error_tau = 2.0d0*abs(utau-xtau)/(utau+xtau)
 
   if ((error_s2.gt.local_perc_ptol) .or. (error_tau.gt.local_perc_ptol)) then
     success = .true.
@@ -867,6 +875,7 @@ subroutine Con2Prim_DekkerInvertTemp(eps_target, T_guess, rho, Ye, result, handl
   CCTK_REAL :: frac_current
   CCTK_REAL :: T_found
   logical :: NR_success
+  character(len=256) :: warnline
 
   CCTK_INT :: anyerr = 0
   CCTK_INT :: keyerr = 0
@@ -894,7 +903,7 @@ subroutine Con2Prim_DekkerInvertTemp(eps_target, T_guess, rho, Ye, result, handl
         T_found, NR_success, handle)
       if (NR_success .eq. .false.) then
       !$OMP CRITICAL
-        write(warnline,"Temperature inversion failed, aborting.")
+        write(warnline,*) "Temperature inversion failed, aborting."
         call CCTK_WARN(1,warnline)
         call CCTK_ERROR("C2P hot failed, aborting.")
         STOP
@@ -960,7 +969,7 @@ subroutine Con2Prim_NRTemp(eps_target, T_guess, rho, Ye, NR_frac, its, reldiff, 
       result = T_current
       done = .true.
       success =.true.
-    else if (count .ge. its)
+    else if (count .ge. its) then
       result = T_current
       done = .true.
       success = .false.
