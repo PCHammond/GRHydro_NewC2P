@@ -340,7 +340,7 @@ subroutine Con2Prim_3DNR_1DD_hot(cctk_iteration, &
 
   integer :: myproc
   character(len=256) :: warnline
-  logical :: NR_failed, Dekker_failed
+  logical :: success_3DNR, success_1DD
 
   !!$Undensitize the variables
   invsdet = 1.0d0/sdet
