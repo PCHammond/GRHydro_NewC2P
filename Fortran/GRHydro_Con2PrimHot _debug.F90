@@ -242,8 +242,8 @@ subroutine Conservative2PrimitiveHot(CCTK_ARGUMENTS)
           endif
         endif
         
-        if(abs(GRHydro_C2P_failed(i,j,k)-3.0d0) .lt. 1.0d-10) then ! .or. &
-          ! temperature(i,j,k).lt.GRHydro_hot_atmo_temp) then
+        if(abs(GRHydro_C2P_failed(i,j,k)-3.0d0) .lt. 1.0d-10 .or. &
+           temperature(i,j,k).lt.GRHydro_hot_atmo_temp) then
           ! dropped out off the EOS table in temperature or below
           ! the temperature of the atmosphere.
           ! Now reset this point to minimum temperature.
@@ -505,6 +505,15 @@ subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2
 
   count = 0
 
+  !$OMP CRITICAL
+  write(warnline,*) "Initial"
+  call CCTK_WARN(1,warnline)
+  write(warnline,*) "W: ", W_guess, "z: ", z_guess, "T: ", T_guess, "count: ", count, "success: ", success
+  call CCTK_WARN(1,warnline)
+  write(warnline,*) "rho: ", udens/W_current, "Ye: ", Ye_current
+  call CCTK_WARN(1,warnline)
+  !$OMP END CRITICAL
+
   !loop
   do while(done .eq. .false.)
     rho_current = udens/W_current
@@ -568,6 +577,37 @@ subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2
     z_current = z_current - delta_z
     T_current = T_current - delta_T
 
+    if (count .eq. 0) then
+      !$OMP CRITICAL
+      write(warnline,*) "Iteration 1"
+      call CCTK_WARN(1,warnline)
+      write(warnline,*) "W: ", W_current, "z: ", z_current, "T: ", T_current
+      call CCTK_WARN(1,warnline)
+      write(warnline,*) "rho: ", udens/W_current, "Ye: ", Ye_current
+      call CCTK_WARN(1,warnline)
+      write(warnline,*) "Jacobian:"
+      call CCTK_WARN(1,warnline)
+      write(warnline,*) J1W,J1z,J1T
+      call CCTK_WARN(1,warnline)
+      write(warnline,*) J2W,J2z,J2T
+      call CCTK_WARN(1,warnline)
+      write(warnline,*) J3W,J3z,J3T
+      call CCTK_WARN(1,warnline)
+      write(warnline,*) "Inverse Jacobian:"
+      call CCTK_WARN(1,warnline)
+      write(warnline,*) iJ1W,iJ2W,iJ3W
+      call CCTK_WARN(1,warnline)
+      write(warnline,*) iJ1z,iJ2z,iJ3z
+      call CCTK_WARN(1,warnline)
+      write(warnline,*) iJ1T,iJ2T,iJ3T
+      call CCTK_WARN(1,warnline)
+      write(warnline,*) "Cons1: ", cons1, "Cons2: ", cons2, "Cons3: ", cons3
+      call CCTK_WARN(1,warnline)
+      write(warnline,*) "Delta W :", delta_W, "z: ", delta_z, "T", delta_T
+      call CCTK_WARN(1,warnline)
+      !$OMP END CRITICAL
+    end if
+
     !Check bounds and oscillation
     if (W_current.lt.1.0d0) then
       W_current = 1.0d0
@@ -622,12 +662,30 @@ subroutine Con2Prim_3DNR_hot(W_guess, z_guess, T_guess, udens, usx, usy, usz, s2
     EOS_rho,EOS_Eps,EOS_T,EOS_ye,EOS_press,EOS_keyerr,EOS_anyerr)
   press_result=EOS_press(1); eps_result=EOS_Eps(1)
 
+  !$OMP CRITICAL
+  write(warnline,*) "Results"
+  call CCTK_WARN(1,warnline)
+  write(warnline,*) "W: ", W_result, "z: ", z_result, "T: ", T_result, "count: ", count, "success: ", success
+  call CCTK_WARN(1,warnline)
+  write(warnline,*) "rho: ", rho_result, "press: ", press_result, "Ye: ", Ye_current, "eps: ", eps_result
+  call CCTK_WARN(1,warnline)
+  !$OMP END CRITICAL
+
   xs2 = (z_result**2) * (1.0d0 - (W_result**(-2.0d0)))
   xh = 1.0d0 + eps_result + press_result/rho_result
   xtau = rho_result * xh * (W_result**2.0d0) - press_result - udens
   
   error_s2  = 2.0d0*abs(s2-xs2)/(s2+xs2)
   error_tau = 2.0d0*abs(utau-xtau)/(utau+xtau)
+
+  !$OMP CRITICAL
+  write(warnline,*) "Check convergence"
+  call CCTK_WARN(1,warnline)
+  write(warnline,*) "s2: ", s2, "xs2: ", xs2, "tau: ", utau, "xtau: ", xtau
+  call CCTK_WARN(1,warnline)
+  write(warnline,*) "error_s2: ", error_s2, "error_tau: ", error_tau
+  call CCTK_WARN(1,warnline)
+  !$OMP END CRITICAL
 
   if ((error_s2.gt.local_perc_ptol) .or. (error_tau.gt.local_perc_ptol)) then
     success = .true.
@@ -736,8 +794,6 @@ subroutine Con2Prim_1DD_hot(udens, usx, usy, usz, s2, utau, uye_con, T_prev, suc
   CCTK_INT, intent(in) :: handle
   CCTK_REAL, intent(inout) :: w_lorentz, rho, press, eps, temp, velx, vely, velz
   logical, intent(out) :: success
-  logical :: InvertSuccess
-  character(len=256) :: warnline
   
   CCTK_REAL :: Ye, q, r
   CCTK_REAL :: a0, b0, fa0, fb0
@@ -862,25 +918,7 @@ subroutine Con2Prim_1DD_hot(udens, usx, usy, usz, s2, utau, uye_con, T_prev, suc
   W_result = sqrt(1.0d0/W_result_m2)
   eps_result = -1.0d0 + (x_result*(1.0d0-(W_result**2))/W_result) + W_result*(1.0d0+q)
   rho_result = udens/W_result
-  call Con2Prim_DekkerInvertTemp(eps_result, T_prev, rho_result, Ye, T_result, handle, InvertSuccess)
-  if (InvertSuccess .eq. .false.) then
-    !$OMP CRITICAL
-    write(warnline,*) "Temperature inversion failed, aborting."
-    call CCTK_WARN(1,warnline)
-    write(warnline,*) "rho_result :", rho_result, "Ye: ", Ye
-    call CCTK_WARN(1,warnline)
-    write(warnline,*) "T_prev :", T_prev
-    call CCTK_WARN(1,warnline)
-    write(warnline,*) "T_result :", T_result
-    call CCTK_WARN(1,warnline)
-    write(warnline,*) "W_result_m2: ", W_result_m2, "W_result: ", W_result
-    call CCTK_WARN(1,warnline)
-    write(warnline,*) "eps_result: ", eps_result, "x_result: ", x_result
-    call CCTK_WARN(1,warnline)
-    call CCTK_ERROR("C2P hot failed, aborting.")
-    STOP
-  !$OMP END CRITICAL
-  end if
+  call Con2Prim_DekkerInvertTemp(eps_result, T_prev, rho_result, Ye, T_result, handle)
   
   EOS_rho(1)=rho_result; EOS_T(1)=T_result; EOS_ye(1)=Ye
   call EOS_Omni_press(handle,EOS_Tflag,GRHydro_eos_rf_prec,EOS_n,&
@@ -925,9 +963,6 @@ subroutine Con2Prim_DekkerRoot(x, udens, Ye, q, r, T_prev, result, handle)
 
   CCTK_REAL :: W_guess_m2, W_guess, eps_guess, T_guess, press_guess, h_guess, rho_guess
 
-  character(len=256) :: warnline
-
-  logical :: InvertSuccess
   !Temporary vars for EOS calls
   CCTK_REAL :: EOS_rho(1)=0.0d0, EOS_T(1)=0.0d0, EOS_ye(1)=0.0d0
   CCTK_REAL :: EOS_press(1)=0.0d0, EOS_eps(1)=0.0d0
@@ -939,25 +974,7 @@ subroutine Con2Prim_DekkerRoot(x, udens, Ye, q, r, T_prev, result, handle)
   W_guess = sqrt(1.0d0/W_guess_m2)
   eps_guess = -1.0d0 + (x*(1.0d0-(W_guess**2))/W_guess) + W_guess*(1.0d0+q)
   rho_guess = udens/W_guess
-  call Con2Prim_DekkerInvertTemp(eps_guess, T_prev, rho_guess, Ye, T_guess,handle,InvertSuccess)
-  if (InvertSuccess .eq. .false.) then
-    !$OMP CRITICAL
-    write(warnline,*) "Temperature inversion failed, aborting."
-    call CCTK_WARN(1,warnline)
-    write(warnline,*) "rho_guess :", rho_guess, "Ye: ", Ye
-    call CCTK_WARN(1,warnline)
-    write(warnline,*) "T_prev :", T_prev
-    call CCTK_WARN(1,warnline)
-    write(warnline,*) "T_guess :", T_guess
-    call CCTK_WARN(1,warnline)
-    write(warnline,*) "W_guess_m2: ", W_guess_m2, "W_guess: ", W_guess
-    call CCTK_WARN(1,warnline)
-    write(warnline,*) "eps_guess: ", eps_guess, "x: ", x
-    call CCTK_WARN(1,warnline)
-    call CCTK_ERROR("C2P hot failed, aborting.")
-    STOP
-  !$OMP END CRITICAL
-  end if
+  call Con2Prim_DekkerInvertTemp(eps_guess, T_prev, rho_guess, Ye, T_guess,handle)
   EOS_rho(1)=rho_guess; EOS_T(1)=T_guess; EOS_ye(1)=Ye
   call EOS_Omni_press(handle,EOS_Tflag,GRHydro_eos_rf_prec,EOS_n,&
     EOS_rho,EOS_eps,EOS_T,EOS_ye,EOS_press,EOS_keyerr,EOS_anyerr)
@@ -969,7 +986,7 @@ subroutine Con2Prim_DekkerRoot(x, udens, Ye, q, r, T_prev, result, handle)
 
 end subroutine Con2Prim_DekkerRoot
 
-subroutine Con2Prim_DekkerInvertTemp(eps_target, T_guess, rho, Ye, result, handle, success)
+subroutine Con2Prim_DekkerInvertTemp(eps_target, T_guess, rho, Ye, result, handle)
 
   implicit none
 
@@ -985,7 +1002,6 @@ subroutine Con2Prim_DekkerInvertTemp(eps_target, T_guess, rho, Ye, result, handl
   CCTK_REAL :: frac_current
   CCTK_REAL :: T_found
   logical :: NR_success
-  logical, intent(out) ::success
   character(len=256) :: warnline
 
   temp_inversion_its = 100
@@ -1010,18 +1026,28 @@ subroutine Con2Prim_DekkerInvertTemp(eps_target, T_guess, rho, Ye, result, handl
         frac_current, its_current, temp_inversion_reldiff, temp_inversion_absdiff, &
         T_found, NR_success, handle)
       if (NR_success .eq. .false.) then
-        success = .false.
+      !$OMP CRITICAL
+        write(warnline,*) "Temperature inversion failed, aborting."
+        call CCTK_WARN(1,warnline)
+        write(warnline,*) "rho :", rho
+        call CCTK_WARN(1,warnline)
+        write(warnline,*) "T_guess :", T_guess
+        call CCTK_WARN(1,warnline)
+        write(warnline,*) "T_found :", T_found
+        call CCTK_WARN(1,warnline)
+        write(warnline,*) "Ye :", Ye
+        call CCTK_WARN(1,warnline)
+        call CCTK_ERROR("C2P hot failed, aborting.")
+        STOP
+      !$OMP END CRITICAL
       else
         result = T_found
-        success = .true.
       end if
     else
       result = T_found
-      success = .true.
     end if
   else
     result = T_found
-    success = .true.
   end if
   return
 end subroutine Con2Prim_DekkerInvertTemp
@@ -1079,6 +1105,13 @@ subroutine Con2Prim_NRTemp(eps_target, T_guess, rho, Ye, NR_frac, its, reldiff, 
     call EOS_Omni_Eps(handle,EOS_Tflag,GRHydro_eos_rf_prec,EOS_n,&
       EOS_rho,EOS_eps,EOS_T,EOS_ye,EOS_keyerr,EOS_anyerr)
     eps_current = EOS_eps(1)
+    
+    if(.false.) then
+    !$OMP CRITICAL
+    write(warnline,*) "T_current: ", T_current, "eps_current: ", eps_current, "eps_target: ", eps_target, "dedT: ", dedT
+    call CCTK_WARN(1,warnline)
+    !$OMP END CRITICAL
+    end if
 
     count = count + 1
 
